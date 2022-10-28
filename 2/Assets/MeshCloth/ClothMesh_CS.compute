@@ -1,0 +1,116 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CaculateForce
+#pragma kernel CaculateConstrain
+#pragma kernel UpdateMeshVert
+#pragma kernel CollisionHanding
+
+struct vert
+{
+    float3 pos;
+    float3 nextpos;
+    float3 force;
+    float3 vel;
+    float2 uv_;
+    float mass;
+};
+
+struct constrain
+{
+    int idx0;
+    int idx1;
+    float k;
+    float orignal_L;
+}; 
+
+struct collisionSphere{
+    float3 sphereCenter;
+    float sphereR;
+};
+
+RWStructuredBuffer<constrain> constrains;
+RWStructuredBuffer<vert> verts;
+float force;
+float N;
+float strainCount;
+float damping;
+float dt;
+float rho;
+
+RWStructuredBuffer<collisionSphere> collisionSpheres;
+
+[numthreads(8,8,1)]
+void CaculateForce (uint3 id : SV_DispatchThreadID)
+{
+   int idx = id.y * N + id.x;
+   if (idx == 0 || idx == N - 1)
+       return;  
+   //nodes[idx].force = 0;
+   //nodes[idx].force = g_[0].g * nodes[idx].mass;
+   verts[idx].vel *= damping;
+   verts[idx].vel += (float3(0,-9.8f,0) + float3(0,0,force))* dt;
+   verts[idx].nextpos = verts[idx].pos;
+   verts[idx].nextpos += verts[idx].vel * dt;
+}  
+
+[numthreads(8,8,1)] 
+void CaculateConstrain (uint3 id : SV_DispatchThreadID)
+{
+    float3 x_sum = float3(0,0,0);
+    int x_num = 0;
+    
+    int idx = id.y * N + id.x;
+    
+    for(int i = 0; i < strainCount; ++i){
+          
+        constrain s = constrains[i];
+        int idx0 = s.idx0;
+        int idx1 = s.idx1;
+        
+        if(idx0 != idx && idx1 != idx){
+            continue;
+        } 
+        vert node0 = verts[idx0];
+        vert node1 = verts[idx1];
+        float3 dirVec = node0.nextpos - node1.nextpos; 
+        float len = length(dirVec);
+        float3 dp = (dirVec/len) * (1.0f / (node0.mass + node1.mass) * (len - rho * s.orignal_L) * s.k);
+        
+        if (idx0 != 0 && idx0 != N - 1 && idx == idx0)
+        {
+            x_sum += (node0.nextpos - dp * node0.mass);
+            x_num += 1;
+        }
+    
+        if (idx1 != 0 && idx1 != N - 1 && idx == idx1)
+        {
+            x_sum += (node1.nextpos + dp * node1.mass);
+            x_num += 1;
+        } 
+     }
+     verts[idx].nextpos = (x_sum + 0.2f * verts[idx].nextpos) / (x_num + 0.2f);
+}
+
+[numthreads(8,8,1)] 
+void UpdateMeshVert (uint3 id : SV_DispatchThreadID)
+{
+   int idx = id.y * N + id.x;
+   verts[idx].vel = (verts[idx].nextpos - verts[idx].pos) / dt;
+   verts[idx].pos = verts[idx].nextpos;
+}  
+
+[numthreads(8,8,1)] 
+void CollisionHanding (uint3 id : SV_DispatchThreadID)
+{
+   int idx = id.y * N + id.x;
+   float3 x = verts[idx].nextpos;
+   collisionSphere sphere = collisionSpheres[0];
+   float3 sphereCenter = sphere.sphereCenter;
+   float sphereR = sphere.sphereR;
+   float3 CtoX = x - sphereCenter;
+   float dis = length(CtoX);
+   if( dis < sphereR){
+        float3 x_new = sphereCenter + sphereR * CtoX / dis;
+        verts[idx].vel += (x_new - verts[idx].nextpos) / dt;
+        verts[idx].nextpos = x_new; 
+   }
+}

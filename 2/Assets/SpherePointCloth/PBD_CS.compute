@@ -1,0 +1,109 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CaculateG
+#pragma kernel updateNodeNextPos
+//#pragma kernel CaculateCollision
+#pragma kernel updateNodeInfo
+
+struct node
+{
+    float3 pos;
+    float3 nextpos;
+    float3 vel;
+    float3 force;
+    float mass;
+};
+
+struct strain
+{
+     int idx0;
+     int idx1;
+     float k;
+     float orignal_L;
+}; 
+
+struct gravity
+{
+    float3 g;
+};
+
+RWStructuredBuffer<node> nodes;
+RWStructuredBuffer<strain> strains;
+RWStructuredBuffer<gravity> g_;
+RWStructuredBuffer<float3> x_sum;
+RWStructuredBuffer<int>x_num;
+
+float damping;
+//float 0.02;
+
+[numthreads(8,8,1)]
+void CaculateG (uint3 id : SV_DispatchThreadID)
+{
+   int idx = id.y * 32 + id.x;
+   if (idx == 0 || idx == 31)
+       return;
+   //nodes[idx].force = 0;
+   //nodes[idx].force = g_[0].g * nodes[idx].mass;
+   nodes[idx].vel *= damping;
+   nodes[idx].vel += (g_[0].g * 0.02);
+   nodes[idx].nextpos = nodes[idx].pos;
+   nodes[idx].nextpos += nodes[idx].vel * 0.02;
+   //nodes[idx].pos = nodes[idx].nextpos;
+}
+
+[numthreads(8,8,1)] 
+void updateNodeNextPos (uint3 id : SV_DispatchThreadID)
+{
+    float3 x_sum = float3(0,0,0);
+    int x_num = 0;
+    
+    int idx = id.y * 32 + id.x;
+    
+    for(int i = 0; i < 5766; ++i){
+        
+        strain s = strains[i];
+        int idx0 = s.idx0;
+        int idx1 = s.idx1;
+        
+        if(idx0 != idx && idx1 != idx){
+            continue;
+        } 
+        node node0 = nodes[idx0];
+        node node1 = nodes[idx1];
+        float3 dirVec = node0.nextpos - node1.nextpos; 
+        float len = length(dirVec);
+        float3 dp = float3(dirVec.x / len , dirVec.y / len , dirVec.z / len) * (1.0f / (node0.mass + node1.mass) * (len - s.orignal_L) * s.k);
+        
+        if (idx0 != 0 && idx0 != 31 && idx == idx0)
+        {
+            
+            x_sum += (nodes[idx0].nextpos - dp * node0.mass);
+            x_num += 1;
+        
+            //nodes[idx0].nextpos = float3(1,1,1);
+        }
+    
+        if (idx1 != 0 && idx1 != 31 && idx == idx1)
+        {
+            x_sum += (nodes[idx1].nextpos + dp * node1.mass);
+            x_num += 1;
+            
+            //nodes[idx1].nextpos = float3(1,1,1);
+        } 
+        
+    }
+    
+    nodes[idx].nextpos = (x_sum + 0.2f * nodes[idx].nextpos) / (x_num + 0.2f);
+    // nodes[idx].nextpos= float3(1,1,1);
+    //x_sum[idx] = float3(0,0,0);
+    //x_num[idx] = 0;
+}
+
+
+
+[numthreads(8,8,1)] 
+void updateNodeInfo (uint3 id : SV_DispatchThreadID)
+{
+   int idx = id.y * 32 + id.x;
+   nodes[idx].vel = (nodes[idx].nextpos - nodes[idx].pos) / 0.02;
+   nodes[idx].pos = nodes[idx].nextpos;
+}
